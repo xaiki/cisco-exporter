@@ -1,0 +1,17 @@
+[package]
+name = "cisco-exporter"
+version = "0.1.0"
+edition = "2021"
+description = "Cisco switch exporter — serves raw show output to HA over authenticated HTTP"
+license = "MIT"
+
+[dependencies]
+# Minimal deps: stdlib HTTP server + subprocess ssh (agent auth).
+# No async runtime, no TLS (tailnet provides encryption), no SSH lib —
+# the system ssh client handles the agent key natively.
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
