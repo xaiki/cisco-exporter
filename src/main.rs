@@ -94,15 +94,32 @@ impl Config {
 fn ssh_show(cfg: &Config, sw: &Switch, cmd: &str) -> Result<String, String> {
     let mut ssh = Command::new("ssh");
     ssh.arg("-t").arg("-t")  // force pty (twice: no fallback to non-tty)
+        // -F /dev/null + explicit IdentityAgent: the host's ~/.ssh/config
+        // may set IdentityAgent, which OVERRIDES SSH_AUTH_SOCK — ssh would
+        // then never consult the agent holding the cisco key. Ignore the
+        // config and pin the agent socket so the cisco key is the FIRST
+        // key offered (agent keys precede identity files).
+        .arg("-F").arg("/dev/null")
         .arg("-o").arg("BatchMode=yes")
         .arg("-o").arg("StrictHostKeyChecking=no")
         .arg("-o").arg("UserKnownHostsFile=/dev/null")
         .arg("-o").arg("ConnectTimeout=10")
+        // The 2960X predates rsa-sha2-256/512 and the modern kex list —
+        // pin legacy ssh-rsa and re-add diffie-hellman-group14/group-
+        // exchange-sha1 (dropped from OpenSSH 9.6 defaults).
+        .arg("-o").arg("PubkeyAcceptedAlgorithms=ssh-rsa")
+        .arg("-o").arg("HostKeyAlgorithms=ssh-rsa")
+        .arg("-o").arg("KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1")
         .arg("-p").arg(sw.port.to_string())
         .arg(format!("{}@{}", cfg.username, sw.host))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Ok(sock) = std::env::var("SSH_AUTH_SOCK") {
+        if !sock.is_empty() {
+            ssh.arg("-o").arg(format!("IdentityAgent={sock}"));
+        }
+    }
     let mut child = ssh.spawn()
         .map_err(|e| format!("ssh spawn: {e}"))?;
     // Feed the enable dance + command through the pty.
