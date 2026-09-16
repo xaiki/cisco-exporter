@@ -131,28 +131,85 @@ fn ssh_show(cfg: &Config, sw: &Switch, cmd: &str) -> Result<String, String> {
     with_ssh_fallback(|legacy| ssh_show_attempt(cfg, sw, cmd, &agent, legacy))
 }
 
+// Read until IOS has finished its response. Passwords are sent only after a
+// password prompt; blind pipelining can echo them into the collected output.
+fn ios_exchange(
+    secret: &str,
+    command: &str,
+    mut prompt: impl FnMut() -> Result<String, String>,
+    mut send: impl FnMut(&str) -> Result<(), String>,
+) -> Result<String, String> {
+    let mut reply = prompt()?;
+    if reply.trim_end().ends_with('>') {
+        send("enable")?;
+        reply = prompt()?;
+        if reply.trim_end().to_ascii_lowercase().ends_with("password:") {
+            if secret.is_empty() { return Err("IOS enable password is not configured".into()); }
+            send(secret)?;
+            reply = prompt()?;
+        }
+    }
+    if !reply.trim_end().ends_with('#') {
+        return Err("IOS privileged prompt was not reached".into());
+    }
+    send("terminal length 0")?;
+    let reply = prompt()?;
+    if !reply.trim_end().ends_with('#') || reply.contains("% ") {
+        return Err("IOS paging could not be disabled".into());
+    }
+    send(command)?;
+    let output = prompt()?;
+    if !output.trim_end().ends_with('#') || output.contains("% ") {
+        return Err("IOS rejected the status command".into());
+    }
+    Ok(output)
+}
+
 fn ssh_show_attempt(cfg: &Config, sw: &Switch, cmd: &str, agent: &str, legacy: bool) -> Result<String, String> {
-    let mut ssh = ssh_command(cfg, sw, agent, legacy);
-    let mut child = ssh.spawn()
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    let mut child = ssh_command(cfg, sw, agent, legacy).spawn()
         .map_err(|e| format!("ssh spawn: {e}"))?;
-    // Feed the enable dance + command through the pty.
-    let mut script = String::from("enable\n");
-    if !cfg.enable_secret.is_empty() {
-        script.push_str(&cfg.enable_secret);
-        script.push('\n');
-    }
-    script.push_str(cmd);
-    script.push_str("\nexit\n");
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(script.as_bytes());
-    }
-    let out = child.wait_with_output()
-        .map_err(|e| format!("ssh wait: {e}"))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("ssh {}: {}", sw.host, err.trim()));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    let mut stdout = child.stdout.take().ok_or("ssh stdout missing")?;
+    let mut stdin = child.stdin.take().ok_or("ssh stdin missing")?;
+    let (tx, rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match stdout.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => if tx.send(buf[..n].to_vec()).is_err() { break; },
+            }
+        }
+    });
+    let mut prompt = || {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut bytes = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let chunk = rx.recv_timeout(remaining).map_err(|_| "SSH closed or timed out waiting for IOS prompt")?;
+            bytes.extend(chunk);
+            if bytes.len() > 2 * 1024 * 1024 { return Err("IOS response exceeds size limit".into()); }
+            let text = String::from_utf8_lossy(&bytes);
+            let tail = text.trim_end();
+            if tail.ends_with('#') || tail.ends_with('>') || tail.to_ascii_lowercase().ends_with("password:") {
+                return Ok(text.into_owned());
+            }
+        }
+    };
+    let result = ios_exchange(&cfg.enable_secret, cmd, &mut prompt, |line| {
+        stdin.write_all(format!("{line}\n").as_bytes()).map_err(|e| format!("ssh write: {e}"))?;
+        stdin.flush().map_err(|e| format!("ssh flush: {e}"))
+    });
+    // The show response is complete. Bound cleanup even if IOS ignores EOF.
+    drop(stdin);
+    let _ = child.kill();
+    let out = child.wait_with_output().map_err(|e| format!("ssh wait: {e}"))?;
+    let _ = reader.join();
+    result.map_err(|error| {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        format!("ssh {}: {error}: {}", sw.host, stderr.trim())
+    })
 }
 
 /// Collect every switch's raw show output.
@@ -280,6 +337,38 @@ mod tests {
             enable_secret: "secret".into(),
             switches,
         }
+    }
+
+    #[test]
+    fn ios_waits_for_password_and_privileged_prompt_before_show() {
+        use std::cell::RefCell;
+        let events = RefCell::new(Vec::new());
+        let mut replies = ["switch>", "Password:", "switch#", "switch#", "Version 15.2(7)E11\nswitch#"].into_iter();
+        let output = ios_exchange("test-password", "show version", || {
+            events.borrow_mut().push("read".to_string());
+            Ok(replies.next().unwrap().to_string())
+        }, |line| { events.borrow_mut().push(line.to_string()); Ok(()) }).unwrap();
+        assert!(output.contains("Version"));
+        assert!(!output.contains("test-password"));
+        assert_eq!(*events.borrow(), vec!["read", "enable", "read", "test-password", "read", "terminal length 0", "read", "show version", "read"]);
+    }
+
+    #[test]
+    fn ios_missing_password_does_not_send_show_as_password() {
+        let mut replies = ["switch>", "Password:"].into_iter();
+        let mut sent = Vec::new();
+        let error = ios_exchange("", "show version", || Ok(replies.next().unwrap().into()), |line| {
+            sent.push(line.to_string()); Ok(())
+        }).unwrap_err();
+        assert!(error.contains("not configured"));
+        assert_eq!(sent, vec!["enable"]);
+    }
+
+    #[test]
+    fn ios_rejects_cli_errors_even_with_a_successful_ssh_connection() {
+        let mut replies = ["switch#", "switch#", "% Authorization failed\nswitch#"].into_iter();
+        let error = ios_exchange("", "show version", || Ok(replies.next().unwrap().into()), |_| Ok(())).unwrap_err();
+        assert!(error.contains("rejected"));
     }
 
     #[test]
