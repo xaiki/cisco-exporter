@@ -91,35 +91,48 @@ impl Config {
 /// The key-only login lands at privilege 1; the show commands need
 /// privileged EXEC. A pty (`-t`) lets us feed `enable` + the secret +
 /// the command as a script, exactly like a console session.
-fn ssh_show(cfg: &Config, sw: &Switch, cmd: &str) -> Result<String, String> {
+fn ssh_command(cfg: &Config, sw: &Switch, agent: &str, legacy: bool) -> Command {
     let mut ssh = Command::new("ssh");
-    ssh.arg("-t").arg("-t")  // force pty (twice: no fallback to non-tty)
-        // -F /dev/null + explicit IdentityAgent: the host's ~/.ssh/config
-        // may set IdentityAgent, which OVERRIDES SSH_AUTH_SOCK — ssh would
-        // then never consult the agent holding the cisco key. Ignore the
-        // config and pin the agent socket so the cisco key is the FIRST
-        // key offered (agent keys precede identity files).
+    ssh.arg("-t").arg("-t")
         .arg("-F").arg("/dev/null")
         .arg("-o").arg("BatchMode=yes")
+        .arg("-o").arg("IdentityFile=none")
+        .arg("-o").arg(format!("IdentityAgent={agent}"))
+        .arg("-o").arg("PreferredAuthentications=publickey")
         .arg("-o").arg("StrictHostKeyChecking=no")
         .arg("-o").arg("UserKnownHostsFile=/dev/null")
         .arg("-o").arg("ConnectTimeout=10")
-        // The 2960X predates rsa-sha2-256/512 and the modern kex list —
-        // pin legacy ssh-rsa and re-add diffie-hellman-group14/group-
-        // exchange-sha1 (dropped from OpenSSH 9.6 defaults).
-        .arg("-o").arg("PubkeyAcceptedAlgorithms=ssh-rsa")
-        .arg("-o").arg("HostKeyAlgorithms=ssh-rsa")
-        .arg("-o").arg("KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1")
-        .arg("-p").arg(sw.port.to_string())
-        .arg(format!("{}@{}", cfg.username, sw.host))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if let Ok(sock) = std::env::var("SSH_AUTH_SOCK") {
-        if !sock.is_empty() {
-            ssh.arg("-o").arg(format!("IdentityAgent={sock}"));
-        }
+        // Host-key negotiation is separate from the client's RSA signature.
+        // Keep modern algorithms available while accepting older IOS hosts.
+        .arg("-o").arg("HostKeyAlgorithms=+ssh-rsa")
+        .arg("-o").arg("KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1");
+    if legacy {
+        // Older firmware disconnects on rsa-sha2: retry on a NEW connection.
+        ssh.arg("-o").arg("PubkeyAcceptedAlgorithms=ssh-rsa");
     }
+    ssh.arg("-p").arg(sw.port.to_string())
+        .arg(format!("{}@{}", cfg.username, sw.host))
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    ssh
+}
+
+fn with_ssh_fallback(mut attempt: impl FnMut(bool) -> Result<String, String>) -> Result<String, String> {
+    match attempt(false) {
+        Ok(output) => Ok(output),
+        Err(modern) => attempt(true)
+            .map_err(|legacy| format!("modern SSH: {modern}; legacy SSH: {legacy}")),
+    }
+}
+
+fn ssh_show(cfg: &Config, sw: &Switch, cmd: &str) -> Result<String, String> {
+    let agent = std::env::var("SSH_AUTH_SOCK")
+        .ok().filter(|value| !value.is_empty())
+        .ok_or("Cisco SSH agent socket is not configured")?;
+    with_ssh_fallback(|legacy| ssh_show_attempt(cfg, sw, cmd, &agent, legacy))
+}
+
+fn ssh_show_attempt(cfg: &Config, sw: &Switch, cmd: &str, agent: &str, legacy: bool) -> Result<String, String> {
+    let mut ssh = ssh_command(cfg, sw, agent, legacy);
     let mut child = ssh.spawn()
         .map_err(|e| format!("ssh spawn: {e}"))?;
     // Feed the enable dance + command through the pty.
@@ -267,6 +280,47 @@ mod tests {
             enable_secret: "secret".into(),
             switches,
         }
+    }
+
+    #[test]
+    fn ssh_options_match_modern_and_legacy_switches() {
+        let cfg = test_config();
+        for legacy in [false, true] {
+            let command = ssh_command(&cfg, &cfg.switches["north"], "/run/test-agent.sock", legacy);
+            let args: Vec<_> = command.get_args().map(|a| a.to_str().unwrap()).collect();
+            assert!(args.contains(&"IdentityFile=none"));
+            assert!(args.contains(&"IdentityAgent=/run/test-agent.sock"));
+            assert!(args.contains(&"PreferredAuthentications=publickey"));
+            assert!(args.contains(&"HostKeyAlgorithms=+ssh-rsa"));
+            assert!(args.contains(&"KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1"));
+            assert_eq!(args.contains(&"PubkeyAcceptedAlgorithms=ssh-rsa"), legacy);
+            assert_eq!(args.last(), Some(&"admin@10.0.0.2"));
+        }
+    }
+
+    #[test]
+    fn modern_success_does_not_retry() {
+        let mut attempts = vec![];
+        let result = with_ssh_fallback(|legacy| {
+            attempts.push(legacy);
+            Ok("show output".into())
+        });
+        assert_eq!(result.unwrap(), "show output");
+        assert_eq!(attempts, vec![false]);
+    }
+
+    #[test]
+    fn old_firmware_gets_a_legacy_retry_and_both_failures_are_reported() {
+        let mut attempts = vec![];
+        let result = with_ssh_fallback(|legacy| {
+            attempts.push(legacy);
+            if legacy { Ok("legacy output".into()) } else { Err("signature rejected".into()) }
+        });
+        assert_eq!(result.unwrap(), "legacy output");
+        assert_eq!(attempts, vec![false, true]);
+        let err = with_ssh_fallback(|legacy| Err(if legacy { "old failed" } else { "new failed" }.into())).unwrap_err();
+        assert!(err.contains("new failed"));
+        assert!(err.contains("old failed"));
     }
 
     #[test]
