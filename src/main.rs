@@ -54,33 +54,46 @@ struct Switch {
 
 impl Config {
     fn load(path: &str) -> Result<Self, String> {
-        let raw = fs::read_to_string(path)
-            .map_err(|e| format!("read config {path}: {e}"))?;
-        let v: serde_json::Value = serde_json::from_str(&raw)
-            .map_err(|e| format!("parse config {path}: {e}"))?;
+        let raw = fs::read_to_string(path).map_err(|e| format!("read config {path}: {e}"))?;
+        let v: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|e| format!("parse config {path}: {e}"))?;
         let mut switches = HashMap::new();
         if let Some(sw) = v.get("switches").and_then(|s| s.as_object()) {
             for (sid, info) in sw {
                 switches.insert(
                     sid.clone(),
                     Switch {
-                        host: info.get("host").and_then(|h| h.as_str())
-                            .unwrap_or("").to_string(),
-                        port: info.get("port").and_then(|p| p.as_u64())
-                            .unwrap_or(22) as u16,
+                        host: info
+                            .get("host")
+                            .and_then(|h| h.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        port: info.get("port").and_then(|p| p.as_u64()).unwrap_or(22) as u16,
                     },
                 );
             }
         }
         Ok(Config {
-            ha_token: v.get("ha_token").and_then(|t| t.as_str())
-                .unwrap_or("").to_string(),
-            exporter_token: v.get("exporter_token").and_then(|t| t.as_str())
-                .unwrap_or("").to_string(),
-            username: v.get("username").and_then(|u| u.as_str())
-                .unwrap_or("admin").to_string(),
-            enable_secret: v.get("enable_secret").and_then(|e| e.as_str())
-                .unwrap_or("").to_string(),
+            ha_token: v
+                .get("ha_token")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string(),
+            exporter_token: v
+                .get("exporter_token")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string(),
+            username: v
+                .get("username")
+                .and_then(|u| u.as_str())
+                .unwrap_or("admin")
+                .to_string(),
+            enable_secret: v
+                .get("enable_secret")
+                .and_then(|e| e.as_str())
+                .unwrap_or("")
+                .to_string(),
             switches,
         })
     }
@@ -93,40 +106,58 @@ impl Config {
 /// the command as a script, exactly like a console session.
 fn ssh_command(cfg: &Config, sw: &Switch, agent: &str, legacy: bool) -> Command {
     let mut ssh = Command::new("ssh");
-    ssh.arg("-t").arg("-t")
-        .arg("-F").arg("/dev/null")
-        .arg("-o").arg("BatchMode=yes")
-        .arg("-o").arg("IdentityFile=none")
-        .arg("-o").arg(format!("IdentityAgent={agent}"))
-        .arg("-o").arg("PreferredAuthentications=publickey")
-        .arg("-o").arg("StrictHostKeyChecking=no")
-        .arg("-o").arg("UserKnownHostsFile=/dev/null")
-        .arg("-o").arg("ConnectTimeout=10")
+    ssh.arg("-t")
+        .arg("-t")
+        .arg("-F")
+        .arg("/dev/null")
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-o")
+        .arg("IdentityFile=none")
+        .arg("-o")
+        .arg(format!("IdentityAgent={agent}"))
+        .arg("-o")
+        .arg("PreferredAuthentications=publickey")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=no")
+        .arg("-o")
+        .arg("UserKnownHostsFile=/dev/null")
+        .arg("-o")
+        .arg("ConnectTimeout=10")
         // Host-key negotiation is separate from the client's RSA signature.
         // Keep modern algorithms available while accepting older IOS hosts.
-        .arg("-o").arg("HostKeyAlgorithms=+ssh-rsa")
-        .arg("-o").arg("KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1");
+        .arg("-o")
+        .arg("HostKeyAlgorithms=+ssh-rsa")
+        .arg("-o")
+        .arg("KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1");
     if legacy {
         // Older firmware disconnects on rsa-sha2: retry on a NEW connection.
         ssh.arg("-o").arg("PubkeyAcceptedAlgorithms=ssh-rsa");
     }
-    ssh.arg("-p").arg(sw.port.to_string())
+    ssh.arg("-p")
+        .arg(sw.port.to_string())
         .arg(format!("{}@{}", cfg.username, sw.host))
-        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     ssh
 }
 
-fn with_ssh_fallback(mut attempt: impl FnMut(bool) -> Result<String, String>) -> Result<String, String> {
+fn with_ssh_fallback(
+    mut attempt: impl FnMut(bool) -> Result<String, String>,
+) -> Result<String, String> {
     match attempt(false) {
         Ok(output) => Ok(output),
-        Err(modern) => attempt(true)
-            .map_err(|legacy| format!("modern SSH: {modern}; legacy SSH: {legacy}")),
+        Err(modern) => {
+            attempt(true).map_err(|legacy| format!("modern SSH: {modern}; legacy SSH: {legacy}"))
+        }
     }
 }
 
 fn ssh_show(cfg: &Config, sw: &Switch, cmd: &str) -> Result<String, String> {
     let agent = std::env::var("SSH_AUTH_SOCK")
-        .ok().filter(|value| !value.is_empty())
+        .ok()
+        .filter(|value| !value.is_empty())
         .ok_or("Cisco SSH agent socket is not configured")?;
     with_ssh_fallback(|legacy| ssh_show_attempt(cfg, sw, cmd, &agent, legacy))
 }
@@ -144,7 +175,9 @@ fn ios_exchange(
         send("enable")?;
         reply = prompt()?;
         if reply.trim_end().to_ascii_lowercase().ends_with("password:") {
-            if secret.is_empty() { return Err("IOS enable password is not configured".into()); }
+            if secret.is_empty() {
+                return Err("IOS enable password is not configured".into());
+            }
             send(secret)?;
             reply = prompt()?;
         }
@@ -165,10 +198,17 @@ fn ios_exchange(
     Ok(output)
 }
 
-fn ssh_show_attempt(cfg: &Config, sw: &Switch, cmd: &str, agent: &str, legacy: bool) -> Result<String, String> {
+fn ssh_show_attempt(
+    cfg: &Config,
+    sw: &Switch,
+    cmd: &str,
+    agent: &str,
+    legacy: bool,
+) -> Result<String, String> {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
-    let mut child = ssh_command(cfg, sw, agent, legacy).spawn()
+    let mut child = ssh_command(cfg, sw, agent, legacy)
+        .spawn()
         .map_err(|e| format!("ssh spawn: {e}"))?;
     let mut stdout = child.stdout.take().ok_or("ssh stdout missing")?;
     let mut stdin = child.stdin.take().ok_or("ssh stdin missing")?;
@@ -178,7 +218,11 @@ fn ssh_show_attempt(cfg: &Config, sw: &Switch, cmd: &str, agent: &str, legacy: b
         loop {
             match stdout.read(&mut buf) {
                 Ok(0) | Err(_) => break,
-                Ok(n) => if tx.send(buf[..n].to_vec()).is_err() { break; },
+                Ok(n) => {
+                    if tx.send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
@@ -187,24 +231,35 @@ fn ssh_show_attempt(cfg: &Config, sw: &Switch, cmd: &str, agent: &str, legacy: b
         let mut bytes = Vec::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let chunk = rx.recv_timeout(remaining).map_err(|_| "SSH closed or timed out waiting for IOS prompt")?;
+            let chunk = rx
+                .recv_timeout(remaining)
+                .map_err(|_| "SSH closed or timed out waiting for IOS prompt")?;
             bytes.extend(chunk);
-            if bytes.len() > 2 * 1024 * 1024 { return Err("IOS response exceeds size limit".into()); }
+            if bytes.len() > 2 * 1024 * 1024 {
+                return Err("IOS response exceeds size limit".into());
+            }
             let text = String::from_utf8_lossy(&bytes);
             let tail = text.trim_end();
-            if tail.ends_with('#') || tail.ends_with('>') || tail.to_ascii_lowercase().ends_with("password:") {
+            if tail.ends_with('#')
+                || tail.ends_with('>')
+                || tail.to_ascii_lowercase().ends_with("password:")
+            {
                 return Ok(text.into_owned());
             }
         }
     };
     let result = ios_exchange(&cfg.enable_secret, cmd, &mut prompt, |line| {
-        stdin.write_all(format!("{line}\n").as_bytes()).map_err(|e| format!("ssh write: {e}"))?;
+        stdin
+            .write_all(format!("{line}\n").as_bytes())
+            .map_err(|e| format!("ssh write: {e}"))?;
         stdin.flush().map_err(|e| format!("ssh flush: {e}"))
     });
     // The show response is complete. Bound cleanup even if IOS ignores EOF.
     drop(stdin);
     let _ = child.kill();
-    let out = child.wait_with_output().map_err(|e| format!("ssh wait: {e}"))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("ssh wait: {e}"))?;
     let _ = reader.join();
     result.map_err(|error| {
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -212,15 +267,30 @@ fn ssh_show_attempt(cfg: &Config, sw: &Switch, cmd: &str, agent: &str, legacy: b
     })
 }
 
-/// Collect every switch's raw show output.
-fn collect(cfg: &Config) -> HashMap<String, serde_json::Value> {
+/// The response envelope, shared by `GET /api/status` and `--dump`.
+fn snapshot_json(switches: HashMap<String, serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({ "switches": switches })
+}
+
+/// Collect every switch's raw show output, or one switch's when `only` is set.
+fn collect(cfg: &Config, only: Option<&str>) -> HashMap<String, serde_json::Value> {
     let mut out = HashMap::new();
     for (sid, sw) in &cfg.switches {
+        if only.is_some_and(|id| id != sid) {
+            continue;
+        }
         let mut sw_out = serde_json::Map::new();
         for (key, cmd) in SHOW_COMMANDS {
             match ssh_show(cfg, sw, cmd) {
-                Ok(text) => { sw_out.insert((*key).to_string(), serde_json::Value::String(text)); }
-                Err(e) => { sw_out.insert((*key).to_string(), serde_json::Value::String(format!("__error__: {e}"))); }
+                Ok(text) => {
+                    sw_out.insert((*key).to_string(), serde_json::Value::String(text));
+                }
+                Err(e) => {
+                    sw_out.insert(
+                        (*key).to_string(),
+                        serde_json::Value::String(format!("__error__: {e}")),
+                    );
+                }
             }
         }
         out.insert(sid.clone(), serde_json::Value::Object(sw_out));
@@ -241,17 +311,19 @@ fn is_authorized(request: &str, ha_token: &str) -> bool {
 }
 
 /// Minimal HTTP/1.1 response.
-fn http_response(status: u16, reason: &str, body: &[u8],
-                 exporter_token: &str) -> Vec<u8> {
+fn http_response(status: u16, reason: &str, body: &[u8], exporter_token: &str) -> Vec<u8> {
     let mut resp = format!(
         "HTTP/1.1 {status} {reason}\r\n\
          Content-Type: application/json\r\n\
          X-Exporter-Token: {token}\r\n\
          Content-Length: {len}\r\n\
          Connection: close\r\n\r\n",
-        status = status, reason = reason,
-        token = exporter_token, len = body.len(),
-    ).into_bytes();
+        status = status,
+        reason = reason,
+        token = exporter_token,
+        len = body.len(),
+    )
+    .into_bytes();
     resp.extend_from_slice(body);
     resp
 }
@@ -271,56 +343,149 @@ fn handle(mut stream: TcpStream, cfg: Arc<Config>) {
 
     // Auth: only GET /api/status with the correct bearer token.
     if method != "GET" || path != "/api/status" {
-        let _ = stream.write_all(&http_response(404, "Not Found", b"{\"error\":\"not found\"}", &cfg.exporter_token));
+        let _ = stream.write_all(&http_response(
+            404,
+            "Not Found",
+            b"{\"error\":\"not found\"}",
+            &cfg.exporter_token,
+        ));
         return;
     }
     let authed = is_authorized(&req, &cfg.ha_token);
     if !authed {
-        let _ = stream.write_all(&http_response(401, "Unauthorized", b"{\"error\":\"unauthorized\"}", &cfg.exporter_token));
+        let _ = stream.write_all(&http_response(
+            401,
+            "Unauthorized",
+            b"{\"error\":\"unauthorized\"}",
+            &cfg.exporter_token,
+        ));
         return;
     }
 
-    let snapshot = collect(&cfg);
-    let body = serde_json::to_vec(&serde_json::json!({ "switches": snapshot }))
+    let snapshot = collect(&cfg, None);
+    let body = serde_json::to_vec(&snapshot_json(snapshot))
         .unwrap_or_else(|_| b"{\"error\":\"serialize\"}".to_vec());
     let _ = stream.write_all(&http_response(200, "OK", &body, &cfg.exporter_token));
+}
+
+const USAGE: &str =
+    "usage: cisco-exporter --config <path> [--host H] [--port P] [--dump [--switch ID]]";
+
+#[derive(Debug)]
+struct Args {
+    config: String,
+    host: String,
+    port: u16,
+    dump: bool,
+    switch: Option<String>,
+}
+
+/// Parse the command line. Flags are positional; an argument that is not one
+/// of them is ignored, and a flag with no following value is an empty string.
+/// A `--port` that does not parse as a `u16` falls back to 8788, but an empty
+/// `--config` or `--switch` is a usage error rather than a silent default.
+fn parse_args(args: &[String]) -> Result<Args, String> {
+    let mut parsed = Args {
+        config: String::new(),
+        host: "0.0.0.0".to_string(),
+        port: 8788,
+        dump: false,
+        switch: None,
+    };
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--config" => {
+                i += 1;
+                parsed.config = args.get(i).cloned().unwrap_or_default();
+            }
+            "--host" => {
+                i += 1;
+                parsed.host = args.get(i).cloned().unwrap_or_default();
+            }
+            "--port" => {
+                i += 1;
+                parsed.port = args.get(i).and_then(|p| p.parse().ok()).unwrap_or(8788);
+            }
+            "--dump" => parsed.dump = true,
+            "--switch" => {
+                i += 1;
+                parsed.switch = Some(args.get(i).cloned().unwrap_or_default());
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if parsed.config.is_empty() {
+        return Err("--config required".to_string());
+    }
+    if parsed.switch.as_deref() == Some("") {
+        return Err("--switch requires a switch id".to_string());
+    }
+    Ok(parsed)
+}
+
+/// `--dump`: run the commands once against the selected switch and print the
+/// snapshot `GET /api/status` would have returned. No listener is opened, and
+/// no token is required — there is no request to authenticate. Command
+/// failures stay in the payload as `__error__:` values, so a dump that found
+/// the switch unreachable still exits 0; an unknown switch id exits 1.
+fn dump_body(cfg: &Config, only: Option<&str>) -> Result<String, String> {
+    if let Some(id) = only {
+        if !cfg.switches.contains_key(id) {
+            return Err(format!("unknown switch: {id}"));
+        }
+    }
+    serde_json::to_string_pretty(&snapshot_json(collect(cfg, only)))
+        .map_err(|e| format!("serialize: {e}"))
+}
+
+fn run_dump(cfg: &Config, only: Option<&str>) -> i32 {
+    match dump_body(cfg, only) {
+        Ok(text) => {
+            println!("{text}");
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: cisco-exporter --config <path> [--host H] [--port P]");
+        eprintln!("{USAGE}");
         std::process::exit(2);
     }
-    let mut config_path = String::new();
-    let mut host = "0.0.0.0".to_string();
-    let mut port: u16 = 8788;
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--config" => { i += 1; config_path = args.get(i).cloned().unwrap_or_default(); }
-            "--host" => { i += 1; host = args.get(i).cloned().unwrap_or_default(); }
-            "--port" => { i += 1; port = args.get(i).and_then(|p| p.parse().ok()).unwrap_or(8788); }
-            _ => {}
+    let args = match parse_args(&args) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
         }
-        i += 1;
-    }
-    if config_path.is_empty() {
-        eprintln!("--config required");
-        std::process::exit(2);
-    }
-    let cfg = match Config::load(&config_path) {
-        Ok(c) => c,
-        Err(e) => { eprintln!("{e}"); std::process::exit(1); }
     };
+    let cfg = match Config::load(&args.config) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if args.dump {
+        std::process::exit(run_dump(&cfg, args.switch.as_deref()));
+    }
     if cfg.ha_token.is_empty() || cfg.exporter_token.is_empty() {
         eprintln!("config missing ha_token/exporter_token");
         std::process::exit(1);
     }
     let cfg = Arc::new(cfg);
-    let listener = TcpListener::bind((host.as_str(), port))
-        .unwrap_or_else(|e| { eprintln!("bind {host}:{port}: {e}"); std::process::exit(1); });
-    eprintln!("[exporter] serving on {host}:{port}");
+    let listener = TcpListener::bind((args.host.as_str(), args.port)).unwrap_or_else(|e| {
+        eprintln!("bind {}:{}: {e}", args.host, args.port);
+        std::process::exit(1);
+    });
+    eprintln!("[exporter] serving on {}:{}", args.host, args.port);
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
@@ -338,7 +503,13 @@ mod tests {
 
     fn test_config() -> Config {
         let mut switches = HashMap::new();
-        switches.insert("north".to_string(), Switch { host: "192.0.2.10".into(), port: 22 });
+        switches.insert(
+            "north".to_string(),
+            Switch {
+                host: "192.0.2.10".into(),
+                port: 22,
+            },
+        );
         Config {
             ha_token: "ha-tok".into(),
             exporter_token: "ex-tok".into(),
@@ -352,23 +523,59 @@ mod tests {
     fn ios_waits_for_password_and_privileged_prompt_before_show() {
         use std::cell::RefCell;
         let events = RefCell::new(Vec::new());
-        let mut replies = ["switch>", "Password:", "switch#", "switch#", "Version 15.2(7)E11\nswitch#"].into_iter();
-        let output = ios_exchange("test-password", "show version", || {
-            events.borrow_mut().push("read".to_string());
-            Ok(replies.next().unwrap().to_string())
-        }, |line| { events.borrow_mut().push(line.to_string()); Ok(()) }).unwrap();
+        let mut replies = [
+            "switch>",
+            "Password:",
+            "switch#",
+            "switch#",
+            "Version 15.2(7)E11\nswitch#",
+        ]
+        .into_iter();
+        let output = ios_exchange(
+            "test-password",
+            "show version",
+            || {
+                events.borrow_mut().push("read".to_string());
+                Ok(replies.next().unwrap().to_string())
+            },
+            |line| {
+                events.borrow_mut().push(line.to_string());
+                Ok(())
+            },
+        )
+        .unwrap();
         assert!(output.contains("Version"));
         assert!(!output.contains("test-password"));
-        assert_eq!(*events.borrow(), vec!["read", "enable", "read", "test-password", "read", "terminal length 0", "read", "show version", "read"]);
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                "read",
+                "enable",
+                "read",
+                "test-password",
+                "read",
+                "terminal length 0",
+                "read",
+                "show version",
+                "read"
+            ]
+        );
     }
 
     #[test]
     fn ios_missing_password_does_not_send_show_as_password() {
         let mut replies = ["switch>", "Password:"].into_iter();
         let mut sent = Vec::new();
-        let error = ios_exchange("", "show version", || Ok(replies.next().unwrap().into()), |line| {
-            sent.push(line.to_string()); Ok(())
-        }).unwrap_err();
+        let error = ios_exchange(
+            "",
+            "show version",
+            || Ok(replies.next().unwrap().into()),
+            |line| {
+                sent.push(line.to_string());
+                Ok(())
+            },
+        )
+        .unwrap_err();
         assert!(error.contains("not configured"));
         assert_eq!(sent, vec!["enable"]);
     }
@@ -376,7 +583,13 @@ mod tests {
     #[test]
     fn ios_rejects_cli_errors_even_with_a_successful_ssh_connection() {
         let mut replies = ["switch#", "switch#", "% Authorization failed\nswitch#"].into_iter();
-        let error = ios_exchange("", "show version", || Ok(replies.next().unwrap().into()), |_| Ok(())).unwrap_err();
+        let error = ios_exchange(
+            "",
+            "show version",
+            || Ok(replies.next().unwrap().into()),
+            |_| Ok(()),
+        )
+        .unwrap_err();
         assert!(error.contains("rejected"));
     }
 
@@ -390,7 +603,9 @@ mod tests {
             assert!(args.contains(&"IdentityAgent=/run/test-agent.sock"));
             assert!(args.contains(&"PreferredAuthentications=publickey"));
             assert!(args.contains(&"HostKeyAlgorithms=+ssh-rsa"));
-            assert!(args.contains(&"KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1"));
+            assert!(args.contains(
+                &"KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1"
+            ));
             assert_eq!(args.contains(&"PubkeyAcceptedAlgorithms=ssh-rsa"), legacy);
             assert_eq!(args.last(), Some(&"admin@192.0.2.10"));
         }
@@ -412,11 +627,19 @@ mod tests {
         let mut attempts = vec![];
         let result = with_ssh_fallback(|legacy| {
             attempts.push(legacy);
-            if legacy { Ok("legacy output".into()) } else { Err("signature rejected".into()) }
+            if legacy {
+                Ok("legacy output".into())
+            } else {
+                Err("signature rejected".into())
+            }
         });
         assert_eq!(result.unwrap(), "legacy output");
         assert_eq!(attempts, vec![false, true]);
-        let err = with_ssh_fallback(|legacy| Err(if legacy { "old failed" } else { "new failed" }.into())).unwrap_err();
+        let err =
+            with_ssh_fallback(
+                |legacy| Err(if legacy { "old failed" } else { "new failed" }.into()),
+            )
+            .unwrap_err();
         assert!(err.contains("new failed"));
         assert!(err.contains("old failed"));
     }
@@ -435,17 +658,102 @@ mod tests {
     fn config_load_parses_switches() {
         let dir = std::env::temp_dir();
         let path = dir.join("cisco-exporter-test-config.json");
-        std::fs::write(&path, r#"{
+        std::fs::write(
+            &path,
+            r#"{
             "ha_token": "ha",
             "exporter_token": "ex",
             "username": "admin",
             "switches": {"north": {"host": "192.0.2.10", "port": 22}}
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         let cfg = Config::load(path.to_str().unwrap()).unwrap();
         assert_eq!(cfg.ha_token, "ha");
         assert_eq!(cfg.switches.len(), 1);
         assert_eq!(cfg.switches["north"].host, "192.0.2.10");
         std::fs::remove_file(&path).ok();
+    }
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_args_uses_the_documented_defaults() {
+        let parsed = parse_args(&argv(&["cisco-exporter", "--config", "/etc/cisco.json"])).unwrap();
+        assert_eq!(parsed.config, "/etc/cisco.json");
+        assert_eq!(parsed.host, "0.0.0.0");
+        assert_eq!(parsed.port, 8788);
+        assert!(!parsed.dump);
+        assert_eq!(parsed.switch, None);
+    }
+
+    #[test]
+    fn parse_args_reads_host_port_dump_and_switch() {
+        let parsed = parse_args(&argv(&[
+            "cisco-exporter",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9101",
+            "--dump",
+            "--switch",
+            "north",
+            "--config",
+            "/c.json",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.host, "127.0.0.1");
+        assert_eq!(parsed.port, 9101);
+        assert!(parsed.dump);
+        assert_eq!(parsed.switch.as_deref(), Some("north"));
+    }
+
+    #[test]
+    fn parse_args_falls_back_on_a_bad_port_but_not_on_an_empty_config_or_switch() {
+        // A `--port` that does not parse is documented to fall back to 8788...
+        let parsed = parse_args(&argv(&["p", "--config", "/c.json", "--port", "http"])).unwrap();
+        assert_eq!(parsed.port, 8788);
+        // ...but a flag that needs a value and got none is a usage error.
+        assert_eq!(
+            parse_args(&argv(&["p", "--dump"])).unwrap_err(),
+            "--config required"
+        );
+        assert_eq!(
+            parse_args(&argv(&["p", "--config"])).unwrap_err(),
+            "--config required"
+        );
+        assert_eq!(
+            parse_args(&argv(&["p", "--config", "/c.json", "--switch"])).unwrap_err(),
+            "--switch requires a switch id"
+        );
+    }
+
+    #[test]
+    fn parse_args_ignores_arguments_that_are_not_flags() {
+        let parsed =
+            parse_args(&argv(&["p", "junk", "--config", "/c.json", "--nope", "1"])).unwrap();
+        assert_eq!(parsed.config, "/c.json");
+        assert_eq!(parsed.port, 8788);
+    }
+
+    #[test]
+    fn dump_envelope_matches_the_http_contract() {
+        let cfg = Config {
+            switches: HashMap::new(),
+            ..test_config()
+        };
+        let dumped: serde_json::Value =
+            serde_json::from_str(&dump_body(&cfg, None).unwrap()).unwrap();
+        assert_eq!(dumped, serde_json::json!({ "switches": {} }));
+    }
+
+    #[test]
+    fn dump_refuses_an_unknown_switch_id_instead_of_printing_nothing() {
+        let cfg = test_config();
+        let error = dump_body(&cfg, Some("south")).unwrap_err();
+        assert!(error.contains("unknown switch: south"));
     }
 
     #[test]
@@ -466,13 +774,28 @@ mod tests {
     fn auth_needs_the_authorization_header_name_and_the_exact_token() {
         let cfg = test_config();
         // The header name is matched case-insensitively...
-        assert!(is_authorized("authorization: Bearer ha-tok\r\n", &cfg.ha_token));
-        assert!(is_authorized("AUTHORIZATION: Bearer ha-tok\r\n", &cfg.ha_token));
+        assert!(is_authorized(
+            "authorization: Bearer ha-tok\r\n",
+            &cfg.ha_token
+        ));
+        assert!(is_authorized(
+            "AUTHORIZATION: Bearer ha-tok\r\n",
+            &cfg.ha_token
+        ));
         // ...but the token and the `Bearer` scheme are not.
-        assert!(!is_authorized("Authorization: Bearer HA-TOK\r\n", &cfg.ha_token));
-        assert!(!is_authorized("Authorization: bearer ha-tok\r\n", &cfg.ha_token));
+        assert!(!is_authorized(
+            "Authorization: Bearer HA-TOK\r\n",
+            &cfg.ha_token
+        ));
+        assert!(!is_authorized(
+            "Authorization: bearer ha-tok\r\n",
+            &cfg.ha_token
+        ));
         // A suffix match on some other header is not authentication.
-        assert!(!is_authorized("X-Comment: Bearer ha-tok\r\n", &cfg.ha_token));
+        assert!(!is_authorized(
+            "X-Comment: Bearer ha-tok\r\n",
+            &cfg.ha_token
+        ));
         assert!(!is_authorized("", &cfg.ha_token));
     }
 }
