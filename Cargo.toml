@@ -3,6 +3,7 @@ name = "cisco-exporter"
 version = "0.1.0"
 edition = "2021"
 description = "Cisco switch exporter — serves raw show output to HA over authenticated HTTP"
+repository = "https://github.com/xaiki/cisco-exporter"
 license = "MIT"
 
 [dependencies]
