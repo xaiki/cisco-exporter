@@ -202,7 +202,9 @@ journal.
   and that the tokens are missing (`config missing ha_token/exporter_token`).
 * **What has to be alerted elsewhere.** Switch health, per-command failures and
   stale data are visible only in the payload (`__error__: ...`) and are the
-  consumer's business. Alert on the Home Assistant side.
+  consumer's business. Home Assistant alerts from its own sensors; a Prometheus
+  consumer alerts on `cisco_switch_command_ok`, `cisco_exporter_scrape_ok` and
+  `cisco_exporter_scrape_age_seconds` — see [metrics.md](metrics.md).
 * **Liveness without a token.** Any unauthorised path answers `404`:
   `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8788/-` returning
   `404` proves the process is up.

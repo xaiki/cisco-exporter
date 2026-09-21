@@ -1,19 +1,30 @@
 # cisco-exporter
 
-A small HTTP exporter that serves the raw output of Cisco IOS `show` commands to
-a Home Assistant instance.
+A small HTTP exporter that serves the raw output of Cisco IOS `show` commands,
+plus the Python package that turns that output into switch state and Prometheus
+metrics.
 
-It is meant to run on a bastion host: the one machine allowed to reach the
-switch management network. Home Assistant polls it over HTTP instead of holding
-SSH credentials for the switches themselves.
+The binary runs on a bastion host: the one machine allowed to reach the switch
+management network. Whoever wants the switch data — Home Assistant, Prometheus,
+a script — makes one read-only HTTP call to that host instead of holding SSH
+credentials for the switches themselves.
 
-* Rust (edition 2021), MIT, one dependency (`serde_json`).
-* A single endpoint: `GET /api/status` returns the raw text of seven `show`
-  commands per switch, as JSON.
-* No TLS, no async runtime, no SSH library. The system `ssh` client is driven as
-  a subprocess and authenticates out of the ssh-agent.
-* The exporter does not parse IOS output. The Home Assistant side does, so a
-  parser change never requires a new binary on the bastion.
+Two artifacts, both MIT:
+
+| artifact | what it is |
+| --- | --- |
+| `cisco-exporter` (Rust) | the binary on the bastion. One endpoint, `GET /api/status`, returning the raw text of seven `show` commands per switch. `--dump` does the same collection without a listener. |
+| `cisco_exporter` (Python) | the consumer side: the show parsers, the exporter's HTTP client, a Prometheus renderer, and a cached `/metrics` bridge. |
+
+* Rust edition 2021, one dependency (`serde_json`). No TLS, no async runtime, no
+  SSH library: the system `ssh` client is driven as a subprocess and
+  authenticates out of the ssh-agent.
+* The binary does not parse IOS output. The parsers are in the Python package in
+  this repository, so a parser change never requires a new binary on the
+  bastion.
+* The Python package has no third-party dependencies, and two of its modules are
+  standard-library-only *by contract* so a host with no Python environment can
+  run them as plain script files. See [docs/metrics.md](docs/metrics.md).
 
 Documentation: [docs/](docs/README.md).
 
@@ -24,6 +35,10 @@ counters). The obvious way to get them is to let Home Assistant log into the
 switches. This exporter exists to avoid that: Home Assistant gets one
 read-only HTTP call to one host, and the switch credentials stay on that host,
 in an ssh-agent, never in the Home Assistant configuration.
+
+Splitting it in two — a raw-text pipe in Rust, the parsing in Python — keeps the
+process on the network-facing host tiny, and keeps the part that changes with
+each consumer's needs out of the deployed binary.
 
 ## Requirements
 
@@ -38,7 +53,13 @@ in an ssh-agent, never in the Home Assistant configuration.
 * A Rust toolchain able to build edition 2021 (built and tested with
   `rustc 1.96.0`).
 
+The Python package needs none of that: only Python 3.11 or newer, and no third
+party packages at all. Working on it needs `uv` (see
+[CONTRIBUTING.md](CONTRIBUTING.md)).
+
 ## Build
+
+### The exporter binary
 
 ```sh
 cargo build --release
@@ -46,6 +67,24 @@ cargo build --release
 
 The binary lands at `target/release/cisco-exporter`. `Cargo.lock` is committed;
 `--locked` is safe to use.
+
+### The Python package
+
+```sh
+cd python
+uv build            # sdist and wheel in python/dist/
+uv run pytest       # parsers, client, renderer and bridge
+uv run ruff check . && uv run mypy
+```
+
+Install it from git, pinned to a tag — this is how a consumer depends on it:
+
+```sh
+pip install "cisco-exporter @ git+https://github.com/xaiki/cisco-exporter@v0.1.0#subdirectory=python"
+```
+
+Then `from cisco_exporter.parsers import parse_snapshot` works, and the
+`cisco-exporter-metrics` command is on `PATH`.
 
 ## Running
 
@@ -58,15 +97,33 @@ cisco-exporter --config /var/local/cisco-exporter/config.json [--host 0.0.0.0] [
 | flag | default | meaning |
 | --- | --- | --- |
 | `--config <path>` | — | Required. Path to the JSON config file. Missing, or a value that is not readable JSON, exits non-zero. |
-| `--host <addr>` | `0.0.0.0` | Listen address. |
-| `--port <port>` | `8788` | Listen port. A value that does not parse as a `u16` silently falls back to 8788. |
+| `--host <addr>` | `0.0.0.0` | Listen address. Ignored by `--dump`, which opens no listener. |
+| `--port <port>` | `8788` | Listen port. A value that does not parse as a `u16` silently falls back to 8788. Ignored by `--dump`. |
+| `--dump` | off | Collect once, print the snapshot to stdout and exit instead of serving. Requires no tokens: there is no request to authenticate. |
+| `--switch <id>` | all | With `--dump`, collect only this switch. An id that is not in the config exits `1`; an empty value exits `2`. |
 
-Any argument that is not one of those three flags is ignored. A flag at the end
+Any argument that is not one of those flags is ignored. A flag at the end
 of the argument list with no following value is treated as an empty string:
 
 * no arguments at all prints the usage line and exits `2`;
 * `--config ""` prints `--config required` and exits `2`;
+* `--switch` with no value prints `--switch requires a switch id` and exits `2`;
 * a `--config` path that cannot be read or parsed prints the error and exits `1`.
+
+### One-shot collection with `--dump`
+
+```sh
+cisco-exporter --config /var/local/cisco-exporter/config.json --dump --switch north
+```
+
+Runs the seven commands once, prints the envelope `GET /api/status` would have
+returned (pretty-printed), and exits. Useful for testing a switch, an SSH agent
+or a config change without a poller, and for capturing real `show` output to
+write parser tests against.
+
+A command that fails is not a dump failure: its value is the
+`"__error__: <message>"` string, exactly as over HTTP, and the process still
+exits `0`. Only an unknown `--switch` id or an unreadable config stops it.
 
 ### Config file
 
@@ -109,9 +166,9 @@ Nothing else is logged; per-switch failures travel in the response body.
 
 | code | condition |
 | --- | --- |
-| 0 | normal shutdown (there is no shutdown path: the process only ends on a signal) |
-| 1 | config file unreadable or unparsable, `ha_token`/`exporter_token` missing, or bind failure |
-| 2 | missing/empty `--config`, or no arguments at all |
+| 0 | normal shutdown (there is no shutdown path: the process only ends on a signal), or a completed `--dump` — including one whose commands all failed |
+| 1 | config file unreadable or unparsable, `ha_token`/`exporter_token` missing, `--switch` id not in the config, or bind failure |
+| 2 | missing/empty `--config`, empty `--switch`, or no arguments at all |
 
 ## HTTP surface
 
@@ -214,6 +271,38 @@ Neither token is a switch credential. The switch key lives in the ssh-agent;
 the IOS `enable` secret lives in the config file and is written only into the
 `enable` prompt (see [docs/credentials.md](docs/credentials.md)).
 
+## Using it without Home Assistant
+
+Home Assistant is one consumer of this exporter, not a requirement. The snapshot
+is a plain JSON document, and the Python package in `python/` is the generic
+consumer: it fetches, verifies the exporter's identity, parses the IOS output
+and renders Prometheus metrics.
+
+```sh
+cisco-exporter-metrics --once \
+  --url http://bastion-1:8788/api/status \
+  --ha-token "$HA_TOKEN" --exporter-token "$EXPORTER_TOKEN"
+```
+
+That prints one exposition-format document and exits, which is all a
+textfile-collector or a cron job needs. Without `--once` it serves `/metrics` on
+`127.0.0.1:9101`, fetching the exporter on its own `--interval` and serving the
+last result — so a scrape never waits on a switch, and scraping more often does
+not make the switches run more commands.
+
+Three properties worth knowing before pointing anything at it:
+
+* a failed fetch drops the switch series and leaves only
+  `cisco_exporter_scrape_ok 0` with a live age, so stale data is never served as
+  if it were current;
+* the exporter token is what the bridge checks to be sure it is talking to this
+  exporter — the same check the Home Assistant poller makes;
+* `/metrics` carries no credential of its own, which is why it binds loopback by
+  default. Expose it deliberately, or scrape it from the same host.
+
+[docs/metrics.md](docs/metrics.md) has the metric reference, the flags, the exit
+codes and the alerting notes.
+
 ## Install as a systemd service
 
 Layout used throughout this documentation:
@@ -298,21 +387,26 @@ the upgrade/rotation procedure.
 
 ```sh
 cargo test
+cd python && uv run pytest
 ```
 
-The tests are unit tests inside `src/main.rs`. They cover the IOS prompt
-protocol, the SSH argument set, the token check, the response envelope and the
-config parser, and they need no network, no switch and no agent.
+The Rust tests are unit tests inside `src/main.rs`: the IOS prompt
+protocol, the SSH argument set, the token check, the argument parser, the
+`--dump` envelope, the response envelope and the config parser. The Python tests
+cover the parsers, the client's identity check, the renderer, and the bridge
+including a real loopback HTTP request. Neither suite needs network, switch or
+agent: the exporter is replaced by a stub returning canned `show` output.
 
 ## Documentation
 
 | document | contents |
 | --- | --- |
 | [docs/README.md](docs/README.md) | index |
-| [docs/architecture.md](docs/architecture.md) | why a single Rust binary, how `ssh` is driven, what is deliberately absent |
+| [docs/architecture.md](docs/architecture.md) | why a Rust pipe plus a Python consumer, how `ssh` is driven, what is deliberately absent |
 | [docs/cisco-ios.md](docs/cisco-ios.md) | SSH negotiation, privileged-EXEC session, IOS quirks |
 | [docs/credentials.md](docs/credentials.md) | what is read, what is never stored, what must never be committed |
 | [docs/operations.md](docs/operations.md) | units, hardening, observability, failure modes, rotation |
+| [docs/metrics.md](docs/metrics.md) | the Python package: parsers, client, `--dump` consumption, Prometheus metric reference, bridge flags and exit codes |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | build, test and commit conventions |
 
 ## Licence

@@ -131,4 +131,4 @@ returned.
 The message is prefixed with the switch: `ssh <host>: <message>: <ssh stderr>`.
 That includes the switch's address, and whatever the local `ssh` printed on
 stderr. It is useful for diagnosis, and it is why these strings belong on the
-private link to Home Assistant.
+private link to the consumer, not on a route to anywhere else.

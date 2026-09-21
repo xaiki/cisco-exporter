@@ -1,17 +1,18 @@
 # Architecture
 
 `cisco-exporter` is a single-process, single-binary HTTP server that turns a
-poll into a sequence of SSH sessions. This document explains the shape and the
-deliberate omissions behind it.
+poll into a sequence of SSH sessions, plus the Python package that consumes what
+it returns. This document explains the shape and the deliberate omissions
+behind it.
 
 ## What the process is
 
 ```
-Home Assistant  ──HTTP GET /api/status──▶  cisco-exporter  ──ssh subprocess──▶  switch
+consumer (Home Assistant, Prometheus, a script)  ──HTTP GET /api/status──▶  cisco-exporter  ──ssh subprocess──▶  switch
        │                                        │
        │◀── {"switches": {sid: {raw show text}}}│
        │
-       └── parses the raw text with the Home Assistant side's own IOS parsers
+       └── uses the cisco_exporter package in this repository
 ```
 
 * One `TcpListener`, one accept loop.
@@ -39,11 +40,11 @@ this binary because of where it sits:
   keep on the bastion: no interpreter version, no virtualenv, no dependency
   tree, and no requirement for the deployment repository to be present on the
   host at runtime. The deployment's job becomes "put this file there".
-* Parsing was moved out of the network path. The exporter returns raw text, so
-  the IOS parsers — the part that changes when Home Assistant's needs change —
-  stay on the Home Assistant side, where they are covered by that project's
-  test suite. A parser fix is a Home Assistant change, not a redeploy of a
-  binary on the bastion.
+* Parsing was moved out of the network path, and out of the binary. The
+  exporter returns raw text; the IOS parsers live in the `cisco_exporter`
+  package in this repository, where they carry their own tests and their own
+  release. A parser fix is a package change — not a redeploy of a binary on the
+  bastion — and no consumer keeps a second copy of them.
 * The security-critical parts are the ones kept in this process: what
   credentials it handles (an agent socket reference and two tokens), what it
   answers, and what it refuses to answer. That is the whole surface above.
@@ -104,9 +105,11 @@ management segment: the switches are on it, and nothing else is. If that
 assumption does not hold for your network, this is the option that must change
 first.
 
-**No parsing, no history, no alerts.** The exporter is a pipe. It does not
-decide what is interesting, does not keep the previous poll, and has no opinion
-about whether a switch answered. Alerting and graphing belong to the consumer.
+**No parsing, no history, no alerts in the binary.** The exporter is a pipe.
+It does not decide what is interesting, does not keep the previous poll, and
+has no opinion about whether a switch answered. Parsing lives in the
+`cisco_exporter` package in this repository; alerting and graphing belong to
+whatever consumes it.
 
 ## Resource profile
 
