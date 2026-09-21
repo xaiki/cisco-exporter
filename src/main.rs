@@ -228,6 +228,18 @@ fn collect(cfg: &Config) -> HashMap<String, serde_json::Value> {
     out
 }
 
+/// The poller's half of the mutual auth: it must send
+/// `Authorization: Bearer <ha_token>`.
+///
+/// Matched line-wise on the raw header name (case-insensitively) and an
+/// exact, case-sensitive `Bearer <ha_token>` suffix on the value.
+fn is_authorized(request: &str, ha_token: &str) -> bool {
+    request.lines().any(|line| {
+        line.to_ascii_lowercase().starts_with("authorization:")
+            && line.trim_end().ends_with(&format!("Bearer {ha_token}"))
+    })
+}
+
 /// Minimal HTTP/1.1 response.
 fn http_response(status: u16, reason: &str, body: &[u8],
                  exporter_token: &str) -> Vec<u8> {
@@ -262,10 +274,7 @@ fn handle(mut stream: TcpStream, cfg: Arc<Config>) {
         let _ = stream.write_all(&http_response(404, "Not Found", b"{\"error\":\"not found\"}", &cfg.exporter_token));
         return;
     }
-    let authed = req.lines().any(|l| {
-        l.to_ascii_lowercase().starts_with("authorization:")
-            && l.trim_end().ends_with(&format!("Bearer {}", cfg.ha_token))
-    });
+    let authed = is_authorized(&req, &cfg.ha_token);
     if !authed {
         let _ = stream.write_all(&http_response(401, "Unauthorized", b"{\"error\":\"unauthorized\"}", &cfg.exporter_token));
         return;
@@ -329,7 +338,7 @@ mod tests {
 
     fn test_config() -> Config {
         let mut switches = HashMap::new();
-        switches.insert("north".to_string(), Switch { host: "10.0.0.2".into(), port: 22 });
+        switches.insert("north".to_string(), Switch { host: "192.0.2.10".into(), port: 22 });
         Config {
             ha_token: "ha-tok".into(),
             exporter_token: "ex-tok".into(),
@@ -383,7 +392,7 @@ mod tests {
             assert!(args.contains(&"HostKeyAlgorithms=+ssh-rsa"));
             assert!(args.contains(&"KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1"));
             assert_eq!(args.contains(&"PubkeyAcceptedAlgorithms=ssh-rsa"), legacy);
-            assert_eq!(args.last(), Some(&"admin@10.0.0.2"));
+            assert_eq!(args.last(), Some(&"admin@192.0.2.10"));
         }
     }
 
@@ -430,35 +439,40 @@ mod tests {
             "ha_token": "ha",
             "exporter_token": "ex",
             "username": "admin",
-            "switches": {"north": {"host": "10.0.0.2", "port": 22}}
+            "switches": {"north": {"host": "192.0.2.10", "port": 22}}
         }"#).unwrap();
         let cfg = Config::load(path.to_str().unwrap()).unwrap();
         assert_eq!(cfg.ha_token, "ha");
         assert_eq!(cfg.switches.len(), 1);
-        assert_eq!(cfg.switches["north"].host, "10.0.0.2");
+        assert_eq!(cfg.switches["north"].host, "192.0.2.10");
         std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn auth_rejects_bad_token() {
-        // The auth check is: request must contain "Authorization: Bearer <ha_token>".
         let cfg = test_config();
         let req = "GET /api/status HTTP/1.1\r\nAuthorization: Bearer wrong\r\n\r\n";
-        let authed = req.lines().any(|l| {
-            l.to_ascii_lowercase().starts_with("authorization:")
-                && l.trim_end().ends_with(&format!("Bearer {}", cfg.ha_token))
-        });
-        assert!(!authed);
+        assert!(!is_authorized(req, &cfg.ha_token));
     }
 
     #[test]
     fn auth_accepts_good_token() {
         let cfg = test_config();
         let req = "GET /api/status HTTP/1.1\r\nAuthorization: Bearer ha-tok\r\n\r\n";
-        let authed = req.lines().any(|l| {
-            l.to_ascii_lowercase().starts_with("authorization:")
-                && l.trim_end().ends_with(&format!("Bearer {}", cfg.ha_token))
-        });
-        assert!(authed);
+        assert!(is_authorized(req, &cfg.ha_token));
+    }
+
+    #[test]
+    fn auth_needs_the_authorization_header_name_and_the_exact_token() {
+        let cfg = test_config();
+        // The header name is matched case-insensitively...
+        assert!(is_authorized("authorization: Bearer ha-tok\r\n", &cfg.ha_token));
+        assert!(is_authorized("AUTHORIZATION: Bearer ha-tok\r\n", &cfg.ha_token));
+        // ...but the token and the `Bearer` scheme are not.
+        assert!(!is_authorized("Authorization: Bearer HA-TOK\r\n", &cfg.ha_token));
+        assert!(!is_authorized("Authorization: bearer ha-tok\r\n", &cfg.ha_token));
+        // A suffix match on some other header is not authentication.
+        assert!(!is_authorized("X-Comment: Bearer ha-tok\r\n", &cfg.ha_token));
+        assert!(!is_authorized("", &cfg.ha_token));
     }
 }
