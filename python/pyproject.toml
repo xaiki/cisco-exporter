@@ -1,0 +1,48 @@
+[project]
+name = "cisco-exporter"
+version = "0.1.0"
+description = "Cisco IOS show parsers and Prometheus metrics for a cisco-exporter snapshot"
+license = "MIT"
+requires-python = ">=3.11"
+# Standard library only: the parsers and the client ship as flat files next to
+# a poller script that has no environment of its own to install into.
+dependencies = []
+
+[project.scripts]
+cisco-exporter-metrics = "cisco_exporter.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cisco_exporter"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.11",
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# Any is treated as a defect rather than a convenience: the parsers and the
+# renderer narrow what they read instead of annotating it away.
+[tool.mypy]
+python_version = "3.11"
+strict = true
+disallow_any_explicit = true
+disallow_any_generics = true
+warn_return_any = true
+warn_unused_ignores = true
+files = ["src", "tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["BLE", "B", "E", "F", "I", "SIM", "UP", "W"]
