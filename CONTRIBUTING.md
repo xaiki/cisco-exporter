@@ -12,11 +12,17 @@ cargo test
 ```
 
 `cargo test` needs no network, no switch and no ssh-agent: every test is a unit
-test in `src/main.rs` and they exercise pure functions (the IOS prompt protocol
+test in `src/tests.rs` and they exercise pure functions (the IOS prompt protocol
 through `ios_exchange` with a scripted prompt source, the SSH argument list, the
 bearer-token check, the command line, the `--dump` envelope, the config
 parser). Keep it that way — a test that needs a switch cannot run in
 development.
+
+The tests live in their own file on purpose: the deployment digests what
+compiles into the binary to decide whether a host needs the new one, so a
+test-only edit must not count as a new build (`machines.host_cisco_exporter.
+version_id`, and the same rule in ghostd). Editing only `src/tests.rs` keeps
+the stamp, and therefore every host, where it is.
 
 ```sh
 cd python

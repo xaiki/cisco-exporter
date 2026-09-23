@@ -18,15 +18,33 @@ pip install "cisco-exporter @ git+https://github.com/xaiki/cisco-exporter@v0.1.0
 | `metrics` | `render()`, `render_scrape()`, `render_switches()`: the Prometheus text format | no |
 | `bridge` | `Bridge`: fetch on a schedule, serve the cached result on `/metrics` | no |
 | `cli` | the `cisco-exporter-metrics` command | no |
+| `version` | the build's own identity: `RELEASE`, `TAGS`, `version_id()` | no |
 
 **Why two modules are special.** The Home Assistant deployment runs its poller
 as a plain script on a host that has no Python environment to install into, so
 it *copies* `parsers.py` and `client.py` next to the poller under the names
 above and imports them as bare modules. That is why those two are
 standard-library-only and free of package-relative imports, and why their
-public names are an interface rather than an implementation detail. Every other
-consumer — including the bridge in the same package — imports the package
+public names are an interface rather than an implementation detail. The copy on
+that host carries a one-line banner naming the build it came from
+(`# cisco-exporter parsers 0.2.0-<digest16>-core`), digested over the content
+below it, so a file whose bytes did not change keeps the banner it had. Every
+other consumer — including the bridge in the same package — imports the package
 normally.
+
+## Which build is this?
+
+`cisco_exporter.version_id()` answers with a release, a digest of the package's
+own modules and the feature tags — `0.2.0-<digest16>-core` — and the command
+line prints the same for `--version`. Content rather than a revision, because
+what runs is the tree: an edit to a parser is a different build, and a revision
+would call the two the same. `TAGS` is empty and the stamp says `core`, because
+this package has no build variants; a tag would be an invented capability.
+
+The exporter binary prints its own stamp the same way (`cisco-exporter
+--version`), and the deployment compares that answer against what the tree
+builds before it pushes or compiles anything — which is why a host already
+running this build is neither re-sent to nor rebuilt.
 
 ## Using the snapshot from your own code
 
@@ -80,6 +98,7 @@ The settings file is the one the Home Assistant deployment already writes:
 | `--listen <host:port>` | `127.0.0.1:9101` | Where `/metrics` is served. |
 | `--interval <seconds>` | `60` | How often the exporter is fetched. |
 | `--once` | off | Print the metrics once and exit instead of serving. |
+| `--version` | — | Print the build of this package and exit, e.g. `0.2.0-<digest16>-core`. Needs no settings: it describes the build, not a run. |
 
 Exit codes: `0` for a `--once` run whose fetch worked, or for a server stopped
 by a signal; `1` for a settings file that cannot be read or is not a JSON

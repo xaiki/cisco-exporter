@@ -101,6 +101,7 @@ cisco-exporter --config /var/local/cisco-exporter/config.json [--host 0.0.0.0] [
 | `--port <port>` | `8788` | Listen port. A value that does not parse as a `u16` silently falls back to 8788. Ignored by `--dump`. |
 | `--dump` | off | Collect once, print the snapshot to stdout and exit instead of serving. Requires no tokens: there is no request to authenticate. |
 | `--switch <id>` | all | With `--dump`, collect only this switch. An id that is not in the config exits `1`; an empty value exits `2`. |
+| `--version` | — | Print the build this binary is and exit: `v0.2.0-<digest16>-core` (release, a digest of the build inputs, the feature tags), or `dev` for a build nobody made for a host. Needs no config. |
 
 Any argument that is not one of those flags is ignored. A flag at the end
 of the argument list with no following value is treated as an empty string:
@@ -390,12 +391,14 @@ cargo test
 cd python && uv run pytest
 ```
 
-The Rust tests are unit tests inside `src/main.rs`: the IOS prompt
-protocol, the SSH argument set, the token check, the argument parser, the
-`--dump` envelope, the response envelope and the config parser. The Python tests
-cover the parsers, the client's identity check, the renderer, and the bridge
-including a real loopback HTTP request. Neither suite needs network, switch or
-agent: the exporter is replaced by a stub returning canned `show` output.
+The Rust tests are unit tests inside `src/tests.rs` — their own file so that
+editing one is not a new build, since the deployment digests only what compiles
+into the binary: the IOS prompt protocol, the SSH argument set, the token check,
+the argument parser, the `--dump` envelope, the response envelope and the config
+parser. The Python tests cover the parsers, the client's identity check, the
+renderer, the version stamp, and the bridge including a real loopback HTTP
+request. Neither suite needs network, switch or agent: the exporter is replaced
+by a stub returning canned `show` output.
 
 ## Documentation
 

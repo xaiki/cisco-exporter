@@ -267,3 +267,19 @@ curl -s -D- -H 'Authorization: Bearer test-token' http://127.0.0.1:8788/api/stat
 The config and the agent are untouched by an upgrade. Secret rotation is in
 [credentials.md](credentials.md); the agent keeps the key across the exporter's
 restart, so no key reload is needed.
+
+Two things make an upgrade legible rather than guesswork:
+
+* the binary names its own build — `cisco-exporter --version` prints
+  `v0.2.0-<digest16>-core`: the release, a digest of exactly the sources that
+  compile into it, and the feature tags. A hand-copied binary that was never
+  stamped says `dev` rather than claiming a build it is not;
+* the deployment writes that same string to `/var/local/cisco-exporter/version`
+  beside the binary, and asks the host for it before pushing or compiling
+  anything. A host already running the build the tree produces is neither
+  re-sent to nor rebuilt, which is what keeps a config-only change from costing
+  a compile on every bastion.
+
+Editing only `src/tests.rs` does not change the version: what compiles into the
+binary is what defines it (`--version` is the authority; the `version` file only
+covers a build old enough not to have been stamped).
