@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .bridge import DEFAULT_INTERVAL, Bridge
 from .client import Exporter
+from .version import version_id
 
 #: Loopback by default: the metrics need no credential of their own, so they
 #: are not exposed beyond the host unless it is asked for.
@@ -39,6 +40,8 @@ def _parser() -> argparse.ArgumentParser:
                         help="seconds between fetches of the exporter (default: 60)")
     parser.add_argument("--once", action="store_true",
                         help="print the metrics once and exit, instead of serving")
+    parser.add_argument("--version", action="store_true",
+                        help="print the build of this package and exit")
     return parser
 
 
@@ -103,6 +106,12 @@ def _listen(value: str) -> tuple[str, int]:
 def main(argv: Sequence[str] | None = None) -> int:
     """The console script. 2 is a usage error, 1 a settings or runtime failure."""
     args = _parser().parse_args(argv)
+    if _flag(args, "version"):
+        # Answers without settings, like the exporter binary: it describes the
+        # build rather than a run, and the deployment asks it of a host whose
+        # settings are exactly what is in question.
+        print(version_id())
+        return 0
     try:
         target = _target(args)
     except (OSError, ValueError, RuntimeError) as exc:

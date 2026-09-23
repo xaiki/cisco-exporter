@@ -13,6 +13,9 @@ and render it in the Prometheus exposition format.
 from .client import Exporter
 from .metrics import CONTENT_TYPE, Scrape, render, render_scrape, render_switches
 from .parsers import parse_snapshot
+from .version import RELEASE as __version__
+from .version import TAGS, source_digest, version_id
 
-__all__ = ["CONTENT_TYPE", "Exporter", "Scrape", "parse_snapshot", "render",
-           "render_scrape", "render_switches"]
+__all__ = ["CONTENT_TYPE", "Exporter", "Scrape", "__version__", "parse_snapshot",
+           "render", "render_scrape", "render_switches", "source_digest", "TAGS",
+           "version_id"]

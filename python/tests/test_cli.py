@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from cisco_exporter.cli import main
+from cisco_exporter.version import RELEASE
 from fakes import FakeResponse, snapshot, urlopen_failing, urlopen_returning
 
 _TARGET = ["--url", "http://x/api/status", "--ha-token", "ha", "--exporter-token", "ex-tok"]
@@ -82,3 +83,15 @@ def test_interval_and_timeout_must_be_positive(
     assert "--interval" in capsys.readouterr().err
     assert main(["--once", "--timeout", "0", *_TARGET]) == 2
     assert "--timeout" in capsys.readouterr().err
+
+
+def test_version_prints_the_build_without_settings(
+        capsys: pytest.CaptureFixture[str]) -> None:
+    """Like the exporter binary, it answers with no settings: it describes the
+    build rather than a run, and whoever asks may be asking about a host whose
+    settings are the thing in question."""
+    assert main(["--version"]) == 0
+    release, digest, tags = capsys.readouterr().out.strip().split("-")
+    assert release == RELEASE
+    assert len(digest) == 16
+    assert tags == "core"
