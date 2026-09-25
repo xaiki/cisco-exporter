@@ -219,6 +219,7 @@ journal.
       -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
       -o ConnectTimeout=10 -o HostKeyAlgorithms=+ssh-rsa \
       -o KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1 \
+      -o ServerAliveInterval=5 -o ServerAliveCountMax=3 \
       -p 22 admin@192.0.2.10
   # then, at the prompt:
   #   enable                      (only if the prompt ends in '>')

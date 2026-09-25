@@ -21,12 +21,25 @@ list below is the entire configuration.
 | `-o StrictHostKeyChecking=no` | no host-key verification (see below) |
 | `-o UserKnownHostsFile=/dev/null` | no known-hosts file is read or written |
 | `-o ConnectTimeout=10` | bound the TCP/SSH connect |
+| `-o ServerAliveInterval=5` | bound an **established** session: send a keepalive every 5 s |
+| `-o ServerAliveCountMax=3` | give up after three unanswered keepalives — `ssh` fails instead of waiting on a socket that will never answer again |
 | `-o HostKeyAlgorithms=+ssh-rsa` | older switches offer only an `ssh-rsa` host key; OpenSSH disables that algorithm by default. The `+` appends it, so modern host keys stay available. |
 | `-o KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1` | the same for the SHA-1 key-exchange groups older IOS offers |
 | `-o PubkeyAcceptedAlgorithms=ssh-rsa` | **legacy attempt only** — see the retry below |
 | `-t -t` | force a pty even though there is no local terminal; the privileged-EXEC session is scripted like a console session |
 | `-p <port>` | from the switch's config entry |
 | `<username>@<host>` | from the config, last argument |
+
+The two timeouts bound different halves of the same wait. `ConnectTimeout`
+covers reaching the switch; the keepalives cover a session that has already
+been established when the path under it goes away — a switch rebooting, a route
+dropping — which is the case that otherwise leaves `ssh` waiting on a socket
+that will never answer again. They ride the SSH channel and are answered by the
+switch's `sshd`, not by IOS, so they say the transport is gone and never that
+the CLI stopped talking: a wedged CLI on a live daemon still answers them, and
+that failure is the prompt deadline described below. Three keepalives at 5 s
+give up at about the same point the prompt deadline does, so neither lengthens
+a poll.
 
 Two negotiation attempts are made per command. The first is the option set
 above; if it fails for any reason, the whole command is retried on a **new

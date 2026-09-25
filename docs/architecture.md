@@ -72,9 +72,11 @@ and the reasons for each option are in [cisco-ios.md](cisco-ios.md)):
   request.
 
 Boundaries: 15 seconds per prompt, 2 MiB of accumulated response per prompt,
-`ConnectTimeout=10` for the TCP/SSH connect itself. A command that fails over
-a modern SSH negotiation is retried once with the legacy algorithm set, on a
-new connection.
+`ConnectTimeout=10` for the TCP/SSH connect itself, and three 5-second
+keepalives for a session whose path disappears under it (ssh's own failure to
+report, distinct from a quiet CLI — see [cisco-ios.md](cisco-ios.md)). A
+command that fails over a modern SSH negotiation is retried once with the
+legacy algorithm set, on a new connection.
 
 ## Deliberate absences
 

@@ -114,8 +114,28 @@ fn ssh_options_match_modern_and_legacy_switches() {
         assert!(args.contains(
             &"KexAlgorithms=+diffie-hellman-group14-sha1,diffie-hellman-group-exchange-sha1"
         ));
+        assert!(args.contains(&"ServerAliveInterval=5"));
+        assert!(args.contains(&"ServerAliveCountMax=3"));
         assert_eq!(args.contains(&"PubkeyAcceptedAlgorithms=ssh-rsa"), legacy);
         assert_eq!(args.last(), Some(&"admin@192.0.2.10"));
+    }
+}
+
+#[test]
+fn ssh_options_are_never_repeated() {
+    // OpenSSH keeps the *first* value of a repeated option, so a second copy
+    // sits in the argument list looking like it changes something while doing
+    // nothing at all.
+    let cfg = test_config();
+    let args: Vec<String> = ssh_command(&cfg, &cfg.switches["north"], "/run/test-agent.sock", true)
+        .get_args()
+        .map(|a| a.to_str().unwrap().to_string())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for pair in args.windows(2) {
+        if pair[0] == "-o" {
+            assert!(seen.insert(pair[1].clone()), "repeated -o {}", pair[1]);
+        }
     }
 }
 

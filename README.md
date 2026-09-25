@@ -165,7 +165,7 @@ Startup writes one line to stderr saying what the process is — the build, wher
 it listens, how many switches, and whether the commands share a session:
 
 ```
-[exporter] v0.3.0-1f2e3d4c5b6a7c8d+core serving on 0.0.0.0:8788 for 2 switch(es), ssh sessions shared in /run/cisco-exporter
+[exporter] v0.3.1-1f2e3d4c5b6a7c8d+core serving on 0.0.0.0:8788 for 2 switch(es), ssh sessions shared in /run/cisco-exporter
 ```
 
 Then one line per request (the duration is the point: without it, "the poller is

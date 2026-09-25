@@ -162,6 +162,19 @@ fn ssh_command(cfg: &Config, sw: &Switch, agent: &str, legacy: bool) -> Command 
         // Older firmware disconnects on rsa-sha2: retry on a NEW connection.
         ssh.arg("-o").arg("PubkeyAcceptedAlgorithms=ssh-rsa");
     }
+    // Bound the session, not only the connect. `ConnectTimeout` above covers
+    // reaching the switch; once a session is established nothing makes ssh
+    // notice that the path went away under it (a reboot, a dropped route) — it
+    // waits on a socket that will never answer again, and the exporter's prompt
+    // deadline is left to report the switch as merely quiet. Three unanswered
+    // keepalives make ssh fail with its own message instead (`Timeout, server
+    // not responding`), in about the time that deadline takes. They travel the
+    // SSH channel, so they measure the transport and not IOS: a wedged CLI on a
+    // live sshd still answers them, and that case stays a prompt timeout.
+    ssh.arg("-o")
+        .arg("ServerAliveInterval=5")
+        .arg("-o")
+        .arg("ServerAliveCountMax=3");
     if let Some(dir) = cfg.ssh_control_dir.as_deref() {
         // Share one SSH session for every `show` on a switch — and, while the
         // master lives, for the next request too. A poll used to cost one

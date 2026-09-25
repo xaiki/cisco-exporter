@@ -16,7 +16,7 @@ from pathlib import Path
 
 #: The released version. Must match ``project.version`` in ``pyproject.toml``:
 #: ``tests/test_version.py`` fails if the two drift, so there is one answer.
-RELEASE = "0.3.0"
+RELEASE = "0.3.1"
 
 #: A build's capability set. Empty means ``core``: the package has no optional
 #: build variants, and inventing a tag for one build would make the stamp lie.
