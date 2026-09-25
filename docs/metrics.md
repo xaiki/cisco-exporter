@@ -13,7 +13,7 @@ pip install "cisco-exporter @ git+https://github.com/xaiki/cisco-exporter@v0.1.0
 
 | module | what it does | ships to a host with no environment |
 | --- | --- | --- |
-| `parsers` | the seven IOS `show` parsers and `parse_snapshot()`: the raw envelope in, parsed switch state out | yes, as `cisco_parsers.py` |
+| `parsers` | the IOS `show` parsers and `parse_snapshot()`: the raw envelope in, parsed switch state out | yes, as `cisco_parsers.py` |
 | `client` | `Exporter`: fetch `GET /api/status`, check `X-Exporter-Token`, narrow the JSON | yes, as `cisco_exporter_client.py` |
 | `metrics` | `render()`, `render_scrape()`, `render_switches()`: the Prometheus text format | no |
 | `bridge` | `Bridge`: fetch on a schedule, serve the cached result on `/metrics` | no |
@@ -116,12 +116,12 @@ startup, like the exporter itself. The path match is exact, so
 
 ### Caching, staleness, and why it is not a scrape proxy
 
-A poll costs one SSH login per switch per command — seven per switch — and the
-exporter caches nothing. A bridge that fetched per scrape would put that whole
-session in front of every scrape, repeatedly, and would usually exceed a
-scraper's timeout. So the bridge fetches on `--interval` and serves the last
-result: scraping more often does not make the switches work more, and a scrape
-never waits on a switch.
+A poll costs one SSH login per switch per command — seven per switch, or one
+shared session with `ssh_control_dir` — and the exporter caches nothing. A
+bridge that fetched per scrape would put that whole session in front of every
+scrape, repeatedly, and would usually exceed a scraper's timeout. So the bridge
+fetches on `--interval` and serves the last result: scraping more often does not
+make the switches work more, and a scrape never waits on a switch.
 
 Two consequences to design alerts around:
 

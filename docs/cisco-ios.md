@@ -100,11 +100,14 @@ ends with `#`, ends with `>`, or ends (case-insensitively) with `password:`.
   that exact form fails the command too.
 * The `#` expectation is on the prompt, not on a marker. A switch configured
   with a non-default prompt shape fails at step 4 or 6.
-* One SSH connection is used **per command**: seven sessions per switch per poll
-  on the happy path, up to fourteen when the legacy retry fires. That is visible
-  on the switch's own side: session limits, `show users`, TACACS+/RADIUS
-  accounting, and syslog all see one login per `show` command. It also means a
-  poll is slow by construction — see the serial-collection notes in
+* One SSH connection is used **per command** unless `ssh_control_dir` is set in
+  the config: seven sessions per switch per poll on the happy path, up to
+  fourteen when the legacy retry fires. With a control directory the commands
+  share one session (and the next poll re-uses it while the master lives), so
+  the switch sees one login per poll instead of one per `show` — which matters
+  because the switch's own side counts them: session limits, `show users`,
+  TACACS+/RADIUS accounting and syslog all see each login. It also means a poll
+  is slow by construction without it — see the serial-collection notes in
   [../README.md](../README.md).
 * `show power inline` and `show mac address-table` may require privilege 15 on
   some platforms; if the enable step is skipped because the login is not

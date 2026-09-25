@@ -1,6 +1,6 @@
 [package]
 name = "cisco-exporter"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Cisco switch exporter — serves raw show output to HA over authenticated HTTP"
 repository = "https://github.com/xaiki/cisco-exporter"

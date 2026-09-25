@@ -1,7 +1,8 @@
 """Serve a Prometheus ``/metrics`` endpoint from a cached exporter snapshot.
 
-A poll costs one SSH login per switch per show command (seven of them), and
-the exporter caches nothing. Serving a scrape straight from it would put that
+A poll costs one SSH login per switch per show command (eight of them) unless
+the exporter is configured to share one session, and the exporter caches
+nothing. Serving a scrape straight from it would put that
 whole session in front of every scrape — longer than a scraper's timeout, and
 repeated as often as the scraper polls. So this bridge fetches on its own
 schedule and serves the last result: a scraper never waits on a switch, and

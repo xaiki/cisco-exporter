@@ -23,6 +23,7 @@ fn test_config() -> Config {
         username: "admin".into(),
         enable_secret: "secret".into(),
         switches,
+        ssh_control_dir: None,
     }
 }
 
@@ -116,6 +117,63 @@ fn ssh_options_match_modern_and_legacy_switches() {
         assert_eq!(args.contains(&"PubkeyAcceptedAlgorithms=ssh-rsa"), legacy);
         assert_eq!(args.last(), Some(&"admin@192.0.2.10"));
     }
+}
+
+#[test]
+fn ssh_options_share_one_session_only_when_a_control_dir_is_set() {
+    let dir = std::env::temp_dir().join("cisco-exporter-test-control");
+    let mut cfg = test_config();
+    let args_of = |cfg: &Config| -> Vec<String> {
+        ssh_command(cfg, &cfg.switches["north"], "/run/test-agent.sock", false)
+            .get_args()
+            .map(|a| a.to_str().unwrap().to_string())
+            .collect()
+    };
+
+    // off by default: an existing config must not need changing
+    let plain = args_of(&cfg);
+    assert!(!plain.iter().any(|a| a.starts_with("ControlMaster=")));
+
+    cfg.ssh_control_dir = Some(dir.to_str().unwrap().to_string());
+    let shared = args_of(&cfg);
+    assert!(shared.contains(&"ControlMaster=auto".to_string()));
+    assert!(shared.contains(&format!("ControlPath={}/cm-%C", dir.display())));
+    assert!(shared.contains(&"ControlPersist=120".to_string()));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn config_load_creates_the_optional_ssh_control_dir() {
+    let base = std::env::temp_dir().join("cisco-exporter-test-controlcfg");
+    std::fs::remove_dir_all(&base).ok();
+    let dir = base.join("sockets");
+    let path = base.join("config.json");
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"ha_token": "ha", "exporter_token": "ex",
+                 "ssh_control_dir": "{}",
+                 "switches": {{"north": {{"host": "192.0.2.10"}}}}}}"#,
+            dir.display()
+        ),
+    )
+    .unwrap();
+    let cfg = Config::load(path.to_str().unwrap()).unwrap();
+    assert_eq!(cfg.ssh_control_dir.as_deref(), Some(dir.to_str().unwrap()));
+    assert!(
+        dir.is_dir(),
+        "the control dir has to exist before ssh needs it"
+    );
+    std::fs::remove_dir_all(&base).ok();
+}
+
+#[test]
+fn binding_is_collected_with_the_other_show_commands() {
+    // The one part a switch that is L2 for its vlans can still answer for its
+    // ports: without it the payload has no per-port address for those.
+    assert!(SHOW_COMMANDS.contains(&("binding", "show ip dhcp snooping binding")));
+    assert_eq!(SHOW_COMMANDS.len(), 8);
 }
 
 #[test]

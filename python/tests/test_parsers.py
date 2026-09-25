@@ -3,8 +3,8 @@
 These are the parser unit tests, so they live with the parsers rather than with
 a consumer of them. They came here from the Home Assistant repository's
 ``tests/test_net_status.py``, along with the code: the cases that exercise
-functions still defined in ``machines.net_ops`` (the DHCP-snooping binding, the
-dnsmasq leases and the TDR pairing) stayed there.
+functions still defined in ``machines.net_ops`` (the dnsmasq leases and the TDR
+pairing) stayed there, and the DHCP-snooping binding followed its parser here.
 
 The fixtures are captured ``show`` output, quirks included — a wrapped Type
 column, a static MAC entry, a 64-bit counter, a port named in long form. Keep
@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from cisco_exporter.parsers import (
     field_of,
     interface_abbr,
+    parse_dhcp_snooping_binding,
     parse_interface_counters,
     parse_interface_status,
     parse_ip_arp,
@@ -51,6 +52,17 @@ Protocol  Address          Age (min)  Hardware Addr   Type   Interface
 Internet  192.0.2.5               -   0011.2233.4455  ARPA   Vlan30
 Internet  198.51.100.10           2   aabb.ccdd.eeff  ARPA   Vlan70
 Internet  198.51.100.11           0   1122.3344.5566  ARPA   Vlan70
+"""
+
+#: The shape a 2960X prints — mac first, one lease column, the type, then vlan
+#: and a long interface name, with a trailer. Captured from the fleet; the
+#: addresses are placeholders, and dropping the trailer is the parser's job.
+SNOOPING_BINDING = """\
+MacAddress          IpAddress        Lease(sec)  Type           VLAN  Interface
+------------------  ---------------  ----------  -------------  ----  --------------------
+00:11:22:33:44:55   10.0.30.7        86400        dhcp-snooping   30    GigabitEthernet0/3
+aa:bb:cc:dd:ee:ff   10.0.70.9        85462        dhcp-snooping   70    GigabitEthernet0/10
+Total number of bindings: 2
 """
 
 COUNTERS = """\
@@ -176,6 +188,43 @@ def test_parse_ip_arp() -> None:
     assert by_ip["192.0.2.5"]["mac"] == "0011.2233.4455"
     assert by_ip["198.51.100.10"]["mac"] == "aabb.ccdd.eeff"
     assert by_ip["198.51.100.10"]["interface"] == "Vlan70"
+
+
+def test_parse_dhcp_snooping_binding_is_per_port() -> None:
+    out = parse_dhcp_snooping_binding(SNOOPING_BINDING)
+    by_ip = {entry["ip"]: entry for entry in out}
+    assert by_ip["10.0.30.7"]["mac"] == "00:11:22:33:44:55"
+    assert by_ip["10.0.30.7"]["port"] == "Gi0/3"
+    assert by_ip["10.0.30.7"]["vlan"] == "30"
+    assert by_ip["10.0.30.7"]["lease"] == "86400"
+    assert by_ip["10.0.30.7"]["type"] == "dhcp-snooping"
+    # the long interface form is abbreviated, like every other port-keyed part
+    assert by_ip["10.0.70.9"]["port"] == "Gi0/10"
+    assert len(out) == 2
+
+
+def test_parse_dhcp_snooping_binding_reads_the_mac_first_table() -> None:
+    # The captured column order is mac-then-ip. A parser that assumed the
+    # reverse — as this one did while it lived in machines.net_ops — dropped
+    # every row a real switch prints, and dropped them silently, so the whole
+    # source simply named no addresses. Both MAC spellings are accepted,
+    # because the dotted form turns up on some builds.
+    dotted = ("0011.2233.4455   10.0.30.8   86400   dhcp-snooping   30   "
+              "Gi0/6\n")
+    assert [e["ip"] for e in parse_dhcp_snooping_binding(SNOOPING_BINDING)] == [
+        "10.0.30.7", "10.0.70.9"]
+    assert [e["ip"] for e in parse_dhcp_snooping_binding(dotted)] == ["10.0.30.8"]
+
+
+def test_binding_rows_that_are_not_rows_are_dropped() -> None:
+    # the header, the rule, the trailer, and the notice a switch without
+    # snooping prints instead of rows
+    assert parse_dhcp_snooping_binding("") == []
+    assert parse_dhcp_snooping_binding(
+        "MacAddress  IpAddress  Lease(sec)\n----  ----  ----\n"
+        "Total number of bindings: 0\n"
+    ) == []
+    assert parse_dhcp_snooping_binding("% DHCP snooping is not enabled\n") == []
 
 
 def test_parse_interface_counters_64bit() -> None:

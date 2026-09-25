@@ -13,7 +13,7 @@ Two artifacts, both MIT:
 
 | artifact | what it is |
 | --- | --- |
-| `cisco-exporter` (Rust) | the binary on the bastion. One endpoint, `GET /api/status`, returning the raw text of seven `show` commands per switch. `--dump` does the same collection without a listener. |
+| `cisco-exporter` (Rust) | the binary on the bastion. One endpoint, `GET /api/status`, returning the raw text of eight `show` commands per switch. `--dump` does the same collection without a listener. |
 | `cisco_exporter` (Python) | the consumer side: the show parsers, the exporter's HTTP client, a Prometheus renderer, and a cached `/metrics` bridge. |
 
 * Rust edition 2021, one dependency (`serde_json`). No TLS, no async runtime, no
@@ -117,7 +117,7 @@ of the argument list with no following value is treated as an empty string:
 cisco-exporter --config /var/local/cisco-exporter/config.json --dump --switch north
 ```
 
-Runs the seven commands once, prints the envelope `GET /api/status` would have
+Runs the commands once, prints the envelope `GET /api/status` would have
 returned (pretty-printed), and exits. Useful for testing a switch, an SSH agent
 or a config change without a poller, and for capturing real `show` output to
 write parser tests against.
@@ -150,6 +150,7 @@ Read once at startup. Expected to be mode `0600`, owned by the service user.
 | `username` | no | `admin` | SSH user for the switches. |
 | `enable_secret` | no | `""` | IOS privileged-EXEC password. Empty means a switch that demands a password cannot be escalated (see [docs/cisco-ios.md](docs/cisco-ios.md)). |
 | `switches` | no | `{}` | Map of switch id → `{ "host": <addr>, "port": <n> }`. A missing `host` becomes `""`, a missing `port` becomes 22. |
+| `ssh_control_dir` | no | unset | A directory for SSH control sockets. When set, a switch's commands share one SSH session — and the next poll re-uses it while the master lives — instead of logging in once per command. Created at startup; a directory that cannot be created is a startup error. Keep it short: the socket lives inside it, and a unix socket path has a length limit. |
 
 Unknown keys are ignored. The switch id is the key under which that switch's
 output appears in the response; the id is not sent anywhere else.
@@ -160,8 +161,31 @@ The only environment variable the process reads is `SSH_AUTH_SOCK`, and only at
 the moment it needs to run a `show` command. If it is unset or empty, every
 command fails with `Cisco SSH agent socket is not configured`.
 
-Startup writes exactly one line to stderr: `[exporter] serving on <host>:<port>`.
-Nothing else is logged; per-switch failures travel in the response body.
+Startup writes one line to stderr saying what the process is — the build, where
+it listens, how many switches, and whether the commands share a session:
+
+```
+[exporter] v0.3.0-1f2e3d4c5b6a7c8d+core serving on 0.0.0.0:8788 for 2 switch(es), ssh sessions shared in /run/cisco-exporter
+```
+
+Then one line per request (the duration is the point: without it, "the poller is
+timing out" and "the switch is slow" look the same from the consumer's side) and
+one per switch collected:
+
+```
+[exporter] GET /api/status -> 200 in 1.42s
+[exporter] north: 8 commands in 1.38s, 0 failed, re-used the ssh session
+```
+
+A switch's command that fails is logged as it happens, with the `ssh` error
+still in it, and stays in the response body as `__error__:` — the log is for
+debugging, the body is the contract:
+
+```
+[exporter] north: poe failed: ssh spawn: No such file or directory
+```
+
+Nothing else is logged: no per-command chatter, no payload contents.
 
 ### Exit codes
 

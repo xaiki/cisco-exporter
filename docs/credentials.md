@@ -45,7 +45,7 @@ agent.
 
 | secret | where it lives | who can obtain it | what it grants |
 | --- | --- | --- | --- |
-| `ha_token` | the exporter's config file, and the consumer's configuration | anyone who can read the `0600` file (root, the service user) and anyone able to read the HTTP request — there is no TLS | one poll: seven SSH logins per switch from the bastion, and the resulting switch output |
+| `ha_token` | the exporter's config file, and the consumer's configuration | anyone who can read the `0600` file (root, the service user) and anyone able to read the HTTP request — there is no TLS | one poll: SSH logins to every switch from the bastion (one shared session per switch with `ssh_control_dir`, otherwise one per `show` command), and the resulting switch output |
 | `exporter_token` | same | anyone who can reach the port: it is returned in `X-Exporter-Token` on every response, including `401` and `404` | nothing on its own. It lets an already-configured poller confirm the responder is the exporter it was configured for. |
 | `enable_secret` | the exporter's config file | anyone who can read the `0600` file; the switch's own AAA/accounting records see the `enable` attempt | privileged EXEC on the switches |
 | switch private key | the ssh-agent, never this process | whoever can reach `/run/cisco-agent/agent.sock` (mode `0700`, service user) | login to the switches at whatever privilege the key's user holds |

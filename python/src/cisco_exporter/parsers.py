@@ -161,6 +161,55 @@ def parse_ip_arp(output: str) -> list[dict[str, str]]:
     return out
 
 
+#: Shapes that make a binding row a *row*: an IPv4 literal and a MAC in either
+#: the dotted or the colon form.
+_IPV4_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+_MAC_RE = re.compile(r"(?:[0-9a-f]{4}\.){2}[0-9a-f]{4}|(?:[0-9a-f]{2}:){5}[0-9a-f]{2}",
+                     re.IGNORECASE)
+
+
+def parse_dhcp_snooping_binding(output: str) -> list[dict[str, str]]:
+    """``show ip dhcp snooping binding`` → [{ip, mac, vlan, port, lease, type}].
+
+    The one address source that is both **per-port** and switch-local: every
+    DHCP exchange a snooping-enabled port relays is recorded here, so the
+    binding table names the address of the device hanging off each port even
+    when the switch is pure L2 for that vlan and its own ARP table never sees
+    the address.
+
+    The table is **mac-first**: a 2960X prints
+
+        MacAddress          IpAddress        Lease(sec)  Type           VLAN  Interface
+        ------------------  ---------------  ----------  -------------  ----  --------------------
+        00:11:22:33:44:55   10.0.30.7        86400        dhcp-snooping   30    GigabitEthernet1/0/5
+        Total number of bindings: 1
+
+    so a row is identified by shape — a MAC, then an IPv4 literal — rather than
+    by position. Reading it as ``ip mac vlan …`` (which this parser did in
+    ``machines.net_ops`` before it moved here) dropped *every* row a real
+    switch prints, and dropped them silently: the source simply named no
+    addresses. Ports are abbreviated like every other port-keyed part, and the
+    header, the ``----`` rule and the trailer fail the shape check.
+    """
+    out: list[dict[str, str]] = []
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) < 6:
+            continue
+        mac, ip, lease, kind, vlan, port = parts[:6]
+        if not _MAC_RE.fullmatch(mac) or not _IPV4_RE.fullmatch(ip):
+            continue
+        out.append({
+            "ip": ip,
+            "mac": mac,
+            "vlan": vlan,
+            "port": interface_abbr(port),
+            "lease": lease,
+            "type": kind,
+        })
+    return out
+
+
 def parse_interface_counters(output: str) -> dict[str, dict[str, int]]:
     """``show interfaces counters`` → {port: {in_octets, in_pkts,
     out_octets, out_pkts}}. Values are 64-bit counters (may exceed 2^32)."""
@@ -241,6 +290,7 @@ PARSERS: dict[str, Callable[[str], object]] = {
     "version": parse_show_version,
     "interfaces": parse_interface_status,
     "macs": parse_mac_table,
+    "binding": parse_dhcp_snooping_binding,
     "arp": parse_ip_arp,
     "counters": parse_interface_counters,
     "poe": parse_power_inline,
